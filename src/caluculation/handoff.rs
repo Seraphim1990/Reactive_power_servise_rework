@@ -2,6 +2,7 @@
 //! API tag names are deliberately outside this module: map them to MainDataSignal.
 use super::condesators::condensators_actor::CondensatorActor;
 use super::generator::{generator_actor::GeneratorActor, remote_actor::RemoteActor};
+use super::grid::{GridMode, GridMonitor};
 use super::{
     auxiliary::AuxiliaryStation,
     power_trend::{PowerTrendTracker, Trend},
@@ -29,6 +30,12 @@ pub struct HandoffCoordinator {
     mode: CompensationMode,
     engine_run: bool,
     auxiliary_requested: Option<bool>,
+    grid: GridMonitor,
+    applied_grid: GridMode,
+    last_off: Option<Instant>,
+    relay_mask: Option<u16>,
+    auxiliary_off: bool,
+    gen_power: Option<f64>,
 }
 
 impl HandoffCoordinator {
@@ -38,6 +45,7 @@ impl HandoffCoordinator {
         remote: RemoteActor,
         auxiliary: AuxiliaryStation,
         trend: PowerTrendTracker,
+        grid: GridMonitor,
     ) -> Self {
         Self {
             batteries,
@@ -48,6 +56,12 @@ impl HandoffCoordinator {
             mode: CompensationMode::Batteries,
             engine_run: false,
             auxiliary_requested: None,
+            grid,
+            applied_grid: GridMode::Grid,
+            last_off: None,
+            relay_mask: None,
+            auxiliary_off: false,
+            gen_power: None,
         }
     }
 
@@ -57,9 +71,20 @@ impl HandoffCoordinator {
 
     pub fn handle(&mut self, now: Instant, event: MainDataSignal) -> Vec<ModbusCommand> {
         let mut out = Vec::new();
+        self.grid.tick(now);
+        match &event {
+            MainDataSignal::MainP(p) => self.grid.power(now, *p),
+            MainDataSignal::MainQ(q) => self.grid.reactive(now, *q),
+            _ => {}
+        }
+        self.sync_grid(now, &mut out);
         match event {
             MainDataSignal::MiddleVoltage(v) => self.batteries.set_voltage(now, v),
+            MainDataSignal::MainP(_) => {}
             MainDataSignal::MainQ(q) => {
+                if self.grid.mode() != GridMode::Grid {
+                    return out;
+                }
                 if self.mode != CompensationMode::Batteries {
                     out.extend(self.generator.handle_q(now, q));
                 }
@@ -71,7 +96,11 @@ impl HandoffCoordinator {
                 if !v.is_finite() || v < 0.0 || v > u16::MAX as f64 || v.fract() != 0.0 {
                     return out;
                 }
+                self.relay_mask = Some(v as u16);
                 out.extend(self.batteries.set_mask(now, v as u16));
+                if self.grid.mode() != GridMode::Grid {
+                    return out;
+                }
                 if self.mode == CompensationMode::HandoffToGenerator {
                     if v == 0.0 {
                         self.batteries.pause_regulation(now);
@@ -86,8 +115,9 @@ impl HandoffCoordinator {
                 if !p.is_finite() || !(p as f32).is_finite() {
                     return out;
                 }
+                self.gen_power = Some(p);
                 self.generator.set_active_power(now, p);
-                if !self.engine_run {
+                if !self.engine_run || self.grid.mode() != GridMode::Grid {
                     return out;
                 }
                 let trend = self.trend.push(p as f32);
@@ -129,8 +159,10 @@ impl HandoffCoordinator {
                     self.generator.set_cos_readback(now, v as u16);
                 }
             }
-            MainDataSignal::SubStationOneState(_) => {
-                // Placeholder only: feedback/retries depend on the real device.
+            MainDataSignal::SubStationOneState(v) => {
+                if v == 0.0 || v == 1.0 {
+                    self.auxiliary_off = v == 0.0;
+                }
             }
             _ => {}
         }
@@ -138,6 +170,9 @@ impl HandoffCoordinator {
     }
 
     fn use_batteries(&mut self, now: Instant, out: &mut Vec<ModbusCommand>) {
+        if self.grid.mode() != GridMode::Grid {
+            return;
+        }
         if self.mode != CompensationMode::Batteries {
             self.batteries.pause_regulation(now); // cancel shutdown, discard old Q
             self.generator.pause_regulation();
@@ -147,6 +182,53 @@ impl HandoffCoordinator {
         if self.auxiliary_requested != Some(true) {
             out.push(self.auxiliary.on());
             self.auxiliary_requested = Some(true);
+        }
+    }
+
+    pub fn grid_mode(&self) -> GridMode {
+        self.grid.mode()
+    }
+
+    fn sync_grid(&mut self, now: Instant, out: &mut Vec<ModbusCommand>) {
+        let mode = self.grid.mode();
+        if mode != self.applied_grid {
+            printers::warn(format!(
+                "Режим мережі: {:?} -> {:?}",
+                self.applied_grid, mode
+            ));
+            self.applied_grid = mode;
+            self.trend.clear();
+            self.generator.pause_regulation();
+            self.batteries.pause_regulation(now);
+            self.last_off = None;
+            if mode == GridMode::Grid {
+                self.auxiliary_requested = None;
+                if self.engine_run && self.gen_power.is_some_and(|p| p > 420.0) {
+                    self.mode = CompensationMode::HandoffToGenerator;
+                    self.batteries.set_allow_turn_on(false);
+                    out.extend(self.batteries.start_soft_shutdown(now));
+                } else {
+                    self.mode = CompensationMode::Batteries;
+                    self.use_batteries(now, out);
+                }
+            }
+        }
+        if mode != GridMode::Grid {
+            self.batteries.set_allow_turn_on(false);
+            let retry = self
+                .last_off
+                .is_none_or(|last| now.saturating_duration_since(last) >= self.grid.cfg.off_retry);
+            if retry {
+                let first = self.last_off.is_none();
+                if first || self.relay_mask != Some(0) {
+                    out.push(self.batteries.force_off(now));
+                }
+                if first || !self.auxiliary_off {
+                    out.push(self.auxiliary.off());
+                }
+                self.auxiliary_requested = Some(false);
+                self.last_off = Some(now);
+            }
         }
     }
 
@@ -163,7 +245,12 @@ impl HandoffCoordinator {
 
     pub fn on_tick(&mut self, now: Instant) -> Vec<ModbusCommand> {
         let mut out = Vec::new();
+        self.grid.tick(now);
+        self.sync_grid(now, &mut out);
         out.extend(self.remote.on_tick(now));
+        if self.grid.mode() != GridMode::Grid {
+            return out;
+        }
         out.extend(self.generator.on_tick(now));
         if self.mode != CompensationMode::Generator {
             out.extend(self.batteries.on_tick(now));
@@ -234,6 +321,13 @@ mod tests {
             remote,
             auxiliary,
             PowerTrendTracker::new(3, 2.0),
+            GridMonitor::new(
+                super::super::grid::GridConfig {
+                    analyzer_timeout: std::time::Duration::from_secs(1000),
+                    ..Default::default()
+                },
+                now,
+            ),
         )
     }
 
@@ -289,6 +383,59 @@ mod tests {
             assert!(c.on_tick(at).is_empty());
         }
         assert_eq!(c.mode(), CompensationMode::Generator);
+    }
+
+    #[test]
+    fn island_forces_both_off_and_blocks_normal_handoff_until_grid_returns() {
+        let now = Instant::now();
+        let mut c = make(now);
+        c.handle(now, MainDataSignal::CondensatorsRelayState(3.0));
+        c.handle(now, MainDataSignal::GenEngineRun(1.0));
+        let mut commands = Vec::new();
+        for i in 0..=5 {
+            let at = now + std::time::Duration::from_secs(i * 2);
+            c.handle(at, MainDataSignal::MainP(15.0));
+            commands.extend(c.handle(at, MainDataSignal::MainQ(0.0)));
+        }
+        assert_eq!(c.grid_mode(), GridMode::Island);
+        assert!(
+            commands
+                .iter()
+                .any(|c| c.state_register == 470 && c.new_state == vec![0])
+        );
+        assert!(
+            commands
+                .iter()
+                .any(|c| c.state_register == 100 && c.new_state == vec![0])
+        );
+        let at = now + std::time::Duration::from_secs(11);
+        assert!(
+            c.handle(at, MainDataSignal::GenEngineRun(0.0))
+                .iter()
+                .all(|cmd| cmd.state_register != 470 && cmd.state_register != 100)
+        );
+        c.handle(at, MainDataSignal::MainP(100.0));
+        c.handle(at, MainDataSignal::MainQ(50.0));
+        assert_eq!(c.grid_mode(), GridMode::Grid);
+        assert_eq!(c.mode(), CompensationMode::Batteries);
+    }
+
+    #[test]
+    fn analyzer_silence_forces_both_off_retries_and_accepts_feedback() {
+        let now = Instant::now();
+        let mut c = make(now);
+        c.grid = GridMonitor::new(Default::default(), now);
+        let cmds = c.on_tick(now + std::time::Duration::from_secs(10));
+        assert_eq!(c.grid_mode(), GridMode::Blackout);
+        assert_eq!(cmds.len(), 2);
+        let at = now + std::time::Duration::from_secs(15);
+        assert_eq!(c.on_tick(at).len(), 2);
+        c.handle(at, MainDataSignal::CondensatorsRelayState(0.0));
+        c.handle(at, MainDataSignal::SubStationOneState(0.0));
+        assert!(
+            c.on_tick(now + std::time::Duration::from_secs(20))
+                .is_empty()
+        );
     }
 
     #[test]

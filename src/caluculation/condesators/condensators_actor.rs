@@ -459,6 +459,13 @@ impl CondensatorActor {
         self.last_q_at = now;
     }
 
+    /// Emergency command: all relay bits off, with no Q-dependent handoff.
+    pub fn force_off(&mut self, now: Instant) -> ModbusCommand {
+        self.pause_regulation(now);
+        self.set_allow_turn_on(false);
+        self.make_command(0)
+    }
+
     pub fn set_kgu(&mut self, on: bool) {
         if self.kgu_on != on {
             self.log(format!("КГУ {}", if on { "ввімкнено" } else { "вимкнено" }));

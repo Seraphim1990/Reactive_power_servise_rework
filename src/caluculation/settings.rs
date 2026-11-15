@@ -105,12 +105,15 @@ pub struct CondensatorsSettings {
     pub target: DeviceSettings,
     #[serde(default)]
     pub actor: ActorConfig,
+    #[serde(default)]
+    pub grid: super::grid::GridConfig,
 }
 impl Default for CondensatorsSettings {
     fn default() -> Self {
         Self {
             state: CondensatorState::default(),
             actor: ActorConfig::default(),
+            grid: super::grid::GridConfig::default(),
             target: DeviceSettings {
                 ip: "192.168.2.211".into(),
                 register: 470,
@@ -123,6 +126,12 @@ impl Default for CondensatorsSettings {
 impl Settings for CondensatorsSettings {
     fn validate(&self) -> Result<()> {
         self.state.validate()?;
+        check(
+            self.grid.island_max.is_finite()
+                && self.grid.island_max >= 0.0
+                && self.grid.island_min_samples >= 2,
+            "invalid island detection settings",
+        )?;
         self.target.validate()?;
         check(
             self.state.bank_voltage_nom.is_finite() && self.state.bank_voltage_nom > 0.0,

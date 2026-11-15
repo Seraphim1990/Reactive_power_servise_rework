@@ -36,3 +36,12 @@ failsafe_step = 1.0
 failsafe_exit_samples = 5
 shed_q_tolerance_steps = 2.0
 shed_timeout = 60.0
+
+# P та Q саме трансформатора, кВт/квар. Всі часові поля — секунди.
+[grid]
+island_max = 15.0
+island_hold = 10.0
+island_min_samples = 5
+# Відсутність свіжого P або Q протягом цього часу — блекаут.
+analyzer_timeout = 10.0
+off_retry = 5.0

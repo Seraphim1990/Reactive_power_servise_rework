@@ -32,10 +32,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let api_config = ApiConfig::load("config/settings.ini").map_err(std::io::Error::other)?;
     let logger = logger::printers::init_logger();
     let ids = Arc::new(AtomicU64::new(1));
+    let grid = caluculation::grid::GridMonitor::new(batteries_cfg.grid.clone(), Instant::now());
     let batteries = batteries_cfg.into_actor(ids.clone(), Instant::now());
     let (generator, remote, trend) = kgu_cfg.into_actor(ids.clone());
     let auxiliary = auxiliary_cfg.into_actor(ids);
-    let coordinator = HandoffCoordinator::new(batteries, generator, remote, auxiliary, trend);
+    let coordinator = HandoffCoordinator::new(batteries, generator, remote, auxiliary, trend, grid);
 
     let (telemetry_tx, telemetry_rx) = mpsc::unbounded_channel();
     let (write_tx, write_rx) = mpsc::channel(64);
