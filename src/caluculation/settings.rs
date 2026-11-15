@@ -6,6 +6,7 @@ use super::{
         condensators_state::CondensatorState,
     },
     generator::generator_actor::{GenTarget, GeneratorActor, GeneratorConfig},
+    generator::remote_actor::RemoteActor,
     power_trend::PowerTrendTracker,
 };
 use crate::meta::state::command::WriteCommand;
@@ -149,12 +150,18 @@ impl CondensatorsSettings {
 pub struct KguSettings {
     pub target: DeviceSettings,
     pub remote_register: u16,
+    #[serde(default = "default_remote_retry", with = "seconds")]
+    pub remote_retry: std::time::Duration,
     pub use_carriage: bool,
     pub trend_capacity: usize,
     pub trend_noise_kw: f32,
     #[serde(default)]
     pub actor: GeneratorConfig,
 }
+fn default_remote_retry() -> std::time::Duration {
+    std::time::Duration::from_secs(5)
+}
+
 impl Default for KguSettings {
     fn default() -> Self {
         Self {
@@ -163,6 +170,7 @@ impl Default for KguSettings {
                 ..Default::default()
             },
             remote_register: 7,
+            remote_retry: default_remote_retry(),
             use_carriage: true,
             trend_capacity: 5,
             trend_noise_kw: 2.0,
@@ -196,8 +204,19 @@ impl Settings for KguSettings {
     }
 }
 impl KguSettings {
-    pub fn into_actor(self, ids: Arc<AtomicU64>) -> (GeneratorActor, PowerTrendTracker) {
+    pub fn into_actor(
+        self,
+        ids: Arc<AtomicU64>,
+    ) -> (GeneratorActor, RemoteActor, PowerTrendTracker) {
         let target = self.target.target();
+        let remote = RemoteActor::new(
+            Target {
+                register: self.remote_register,
+                ..target.clone()
+            },
+            self.remote_retry,
+            ids.clone(),
+        );
         let actor = GeneratorActor::new(
             self.actor,
             GenTarget {
@@ -205,7 +224,6 @@ impl KguSettings {
                 port: target.port,
                 unit: target.unit,
                 setpoint_register: target.register,
-                remote_register: self.remote_register,
                 write: target.write,
             },
             ids,
@@ -213,6 +231,7 @@ impl KguSettings {
         );
         (
             actor,
+            remote,
             PowerTrendTracker::new(self.trend_capacity, self.trend_noise_kw),
         )
     }

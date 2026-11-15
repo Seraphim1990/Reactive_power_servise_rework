@@ -5,7 +5,7 @@
 //!   handle_q(now, Q)              - відлік Q мережі; може повернути новий запис уставки
 //!   set_cos_readback(now, v)      - зчитана з пристрою уставка (джерело істини)
 //!   set_active_power(now, P_gen)  - активна потужність КГУ
-//!   set_remote(now, bool)         - дистанційний режим; при втраті повертає запис remote=1
+//!   set_remote(bool)              - фактичний дистанційний режим; записує окремий RemoteActor
 //!   set_engine_run(now, bool)     - КГУ працює; при зупинці повертає запис «парковки» уставки
 //!   income_callback(now, cb)      - результат доставки команди
 //!   on_tick(now) / next_deadline()- таймаут кроку
@@ -39,7 +39,6 @@ pub struct GenTarget {
     pub port: u16,
     pub unit: u16,              // адреса пристрою
     pub setpoint_register: u16, // регістр уставки cos (8)
-    pub remote_register: u16,   // регістр дистанційного режиму (7)
     pub write: WriteCommand,
 }
 
@@ -52,8 +51,6 @@ pub struct GeneratorConfig {
     #[serde(with = "crate::caluculation::settings::seconds")]
     pub step_timeout: Duration,   // скільки чекати, поки зчитана уставка збіжиться
     pub settle_skip: u8,          // скільки перших Q після запису відкинути
-    #[serde(with = "crate::caluculation::settings::seconds")]
-    pub remote_retry: Duration,   // мінімальна пауза між спробами повернути дистанційний режим
 }
 
 impl Default for GeneratorConfig {
@@ -64,7 +61,6 @@ impl Default for GeneratorConfig {
             carriage_step_units: 1,
             step_timeout: Duration::from_secs(8),
             settle_skip: 1,
-            remote_retry: Duration::from_secs(5),
         }
     }
 }
@@ -95,7 +91,6 @@ pub struct GeneratorActor {
     remote: bool,
     engine_run: bool,
     was_regulating: bool, // для логу переходів «регулюю / не регулюю»
-    last_remote_try: Option<Instant>,
 
     q_buf: RingBuf<GEN_WINDOW>,
     phase: Phase,
@@ -119,13 +114,12 @@ impl GeneratorActor {
             remote: false,
             engine_run: false,
             was_regulating: false,
-            last_remote_try: None,
             q_buf: RingBuf::new(),
             phase: Phase::Idle,
             last_alarm: None,
         };
         actor.log(format!(
-            "актор створено: режим {}, коридор {:.1}..{:.1} квар, КГУ слухає уставку від {:.0} кВт, пристрій {}:{} (unit {}, уставка в регістрі {}, дистанційний режим в {})",
+            "актор створено: режим {}, коридор {:.1}..{:.1} квар, КГУ слухає уставку від {:.0} кВт, пристрій {}:{} (unit {}, уставка в регістрі {})",
             actor.mode_name(),
             actor.cfg.trim.target_kvar - actor.cfg.trim.deadband_floor_kvar,
             actor.cfg.trim.target_kvar + actor.cfg.trim.deadband_floor_kvar,
@@ -133,8 +127,7 @@ impl GeneratorActor {
             actor.target.ip,
             actor.target.port,
             actor.target.unit,
-            actor.target.setpoint_register,
-            actor.target.remote_register
+            actor.target.setpoint_register
         ));
         actor
     }
@@ -250,32 +243,13 @@ impl GeneratorActor {
         }
     }
 
-    /// Дистанційний режим. Регістри пристрою інколи злітають у дефолт, тому при втраті
-    /// режиму повертаємо запис remote=1, але не частіше ніж раз на `remote_retry`.
-    pub fn set_remote(&mut self, now: Instant, remote: bool) -> Option<ModbusCommand> {
+    /// The remote guardian owns writes; the regulator only consumes actual status.
+    pub fn set_remote(&mut self, remote: bool) {
         if remote != self.remote {
-            if remote {
-                self.log("дистанційний режим КГУ є".to_string());
-            } else {
-                self.alarm("дистанційний режим КГУ втрачено (регістри могли злетіти в дефолт)");
-            }
+            self.log(format!("дистанційний режим КГУ: {remote}"));
+            self.pause_regulation();
         }
         self.remote = remote;
-        if remote {
-            return None;
-        }
-        if let Some(last) = self.last_remote_try {
-            if now.saturating_duration_since(last) < self.cfg.remote_retry {
-                return None;
-            }
-        }
-        self.last_remote_try = Some(now);
-        let cmd = self.make_command(self.target.remote_register, 1);
-        self.log(format!(
-            "повертаю дистанційний режим: пишу 1 в регістр {} (id {})",
-            self.target.remote_register, cmd.id
-        ));
-        Some(cmd)
     }
 
     /// КГУ працює / зупинений. При зупинці паркуємо уставку (795), щоб наступний старт
@@ -328,7 +302,7 @@ impl GeneratorActor {
                 if ours_acked {
                     self.log(format!("квитанція: пристрій прийняв запис уставки (id {cid})"));
                 } else {
-                    self.log(format!("квитанція id {cid} не стосується поточного кроку (віддалений режим, паркування чи старий крок)"));
+                    self.log(format!("квитанція id {cid} не стосується поточного кроку (паркування чи старий крок)"));
                 }
             }
             CommandCallback::Unsatisfied(cid) => {

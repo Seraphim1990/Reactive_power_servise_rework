@@ -1,7 +1,7 @@
 //! Routes telemetry to the actors; returned commands must go to WriteMaster.
 //! API tag names are deliberately outside this module: map them to MainDataSignal.
 use super::condesators::condensators_actor::CondensatorActor;
-use super::generator::generator_actor::GeneratorActor;
+use super::generator::{generator_actor::GeneratorActor, remote_actor::RemoteActor};
 use super::{
     auxiliary::AuxiliaryStation,
     power_trend::{PowerTrendTracker, Trend},
@@ -23,6 +23,7 @@ pub enum CompensationMode {
 pub struct HandoffCoordinator {
     batteries: CondensatorActor,
     generator: GeneratorActor,
+    remote: RemoteActor,
     auxiliary: AuxiliaryStation,
     trend: PowerTrendTracker,
     mode: CompensationMode,
@@ -34,12 +35,14 @@ impl HandoffCoordinator {
     pub fn new(
         batteries: CondensatorActor,
         generator: GeneratorActor,
+        remote: RemoteActor,
         auxiliary: AuxiliaryStation,
         trend: PowerTrendTracker,
     ) -> Self {
         Self {
             batteries,
             generator,
+            remote,
             auxiliary,
             trend,
             mode: CompensationMode::Batteries,
@@ -115,8 +118,11 @@ impl HandoffCoordinator {
                     self.use_batteries(now, &mut out);
                 }
             }
-            MainDataSignal::GenSetterLocalRemoteState(v) if v == 0.0 || v == 1.0 => {
-                out.extend(self.generator.set_remote(now, v == 1.0));
+            MainDataSignal::GenSetterLocalRemoteState(v) => {
+                if v.is_finite() && (0.0..=u16::MAX as f64).contains(&v) && v.fract() == 0.0 {
+                    self.generator.set_remote(v == 1.0);
+                    out.extend(self.remote.set_readback(now, v as u16));
+                }
             }
             MainDataSignal::GenCosSetpointOutput(v) => {
                 if v.is_finite() && (0.0..=1000.0).contains(&v) && v.fract() == 0.0 {
@@ -145,6 +151,9 @@ impl HandoffCoordinator {
     }
 
     pub fn callback(&mut self, now: Instant, cb: CommandCallback) {
+        if self.remote.callback(cb) {
+            return;
+        }
         if matches!(cb, CommandCallback::Unsatisfied(_)) {
             printers::warn(format!("Команда координатора/актора не доставлена: {cb:?}"));
         }
@@ -154,6 +163,7 @@ impl HandoffCoordinator {
 
     pub fn on_tick(&mut self, now: Instant) -> Vec<ModbusCommand> {
         let mut out = Vec::new();
+        out.extend(self.remote.on_tick(now));
         out.extend(self.generator.on_tick(now));
         if self.mode != CompensationMode::Generator {
             out.extend(self.batteries.on_tick(now));
@@ -196,11 +206,18 @@ mod tests {
                 port: 502,
                 unit: 2,
                 setpoint_register: 8,
-                remote_register: 7,
                 write: WriteCommand::Single,
             },
             ids.clone(),
             true,
+        );
+        let remote = RemoteActor::new(
+            Target {
+                register: 7,
+                ..target.clone()
+            },
+            std::time::Duration::from_secs(5),
+            ids.clone(),
         );
         let auxiliary = AuxiliaryStation {
             target: Target {
@@ -214,6 +231,7 @@ mod tests {
         HandoffCoordinator::new(
             batteries,
             generator,
+            remote,
             auxiliary,
             PowerTrendTracker::new(3, 2.0),
         )
@@ -254,6 +272,23 @@ mod tests {
                 .is_empty()
         );
         assert_eq!(c.batteries.phase_name(), "Idle");
+    }
+
+    #[test]
+    fn twenty_seconds_of_fresh_low_values_is_not_a_failsafe_condition() {
+        let now = Instant::now();
+        let mut c = make(now);
+        c.handle(now, MainDataSignal::CondensatorsRelayState(0.0));
+        c.handle(now, MainDataSignal::GenEngineRun(1.0));
+        // Already in Generator mode, with no falling trend in the current window.
+        c.mode = CompensationMode::Generator;
+        for seconds in 0..=20 {
+            let at = now + std::time::Duration::from_secs(seconds);
+            assert!(c.handle(at, MainDataSignal::GenActivePower(5.0)).is_empty());
+            assert!(c.handle(at, MainDataSignal::MainQ(5.0)).is_empty());
+            assert!(c.on_tick(at).is_empty());
+        }
+        assert_eq!(c.mode(), CompensationMode::Generator);
     }
 
     #[test]
