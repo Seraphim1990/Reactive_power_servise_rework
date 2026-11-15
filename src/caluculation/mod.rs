@@ -1,3 +1,6 @@
 pub mod condesators;
 pub mod actor_loop;
-mod generator;
+pub mod generator;
+pub mod power_trend;
+pub mod auxiliary;
+pub mod handoff;

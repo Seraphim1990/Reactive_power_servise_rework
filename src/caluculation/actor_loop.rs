@@ -1,73 +1,54 @@
-use std::sync::Arc;
-use std::sync::atomic::AtomicU64;
-use crate::caluculation::condesators::condensators_actor::{CondensatorActor, ActorConfig, Target};
-use crate::caluculation::condesators::condensators_state::CondensatorState;
+//! API adapter sends MainDataSignal here; WriteMaster runs independently.
+use super::handoff::HandoffCoordinator;
+use crate::meta::state::{
+    command::{CommandCallback, ModbusCommand},
+    main_data::MainDataSignal,
+};
+use std::time::Instant;
+use tokio::sync::{mpsc, oneshot};
+use tokio::task::JoinSet;
 use tokio::time::{self, Duration};
-use tokio::sync::mpsc;
-use crate::meta::state::command::WriteCommand;
-use crate::meta::state::main_data;
-use crate::meta::state::main_data::MainDataSignal;
-/*
-шо у нас буде?
-вольтаж, реактив на трансформаторі, стан реле коденсаторів, стан реле автономної конденсаторної установки(вкл-викл),
-уставка косинусу генератора, потужність генератора, local-remote уставка косинусу генератора(вкл-викл, важливий ньюанс!),
-стан самого генератора(вкл-викл)
 
-нафіга нам вольтаж? хіба для перерахунку потужності конденсаторних батарей відносно вольтажу.
+pub type WriteRequest = (ModbusCommand, oneshot::Sender<CommandCallback>);
 
-чим будемо керувати?
-ввімкнення remote на ТРМ в КГУ, вкл-викл автономки, зміна стану реле конденсаторів, зміна уставки косинусу КГУ
-
-
-TODO: додати сюди cross_scale::trim_setpoint, математика уставки косинусу
-TODO: створити окремого актора, який буде відправляти команди пристроям, потрібно відслідковувати стан відправили-змінилось
-TODO: створити енум вхідних подій для каналу цього актора від вебсокету і додати актора самого вебсокету(злизати з ТГ бота)
-TODO: додати аналіз тенденції потужності генератора, придумати як розуміти, що напруги на трансформаторі немає(не приходять дані по Q) та режим острів
-TODO: подумати про перерахування фактичної потужності батарей відносно вольтажу, але то смішні зміни
- */
-
-
-// TODO переробити
-async fn reactive_loop(mut rx: mpsc::Receiver<MainDataSignal>) {
-    let ids_counter = Arc::new(AtomicU64::new(0));
-    let coord_state = CondensatorState::load_or_create("../../config/condensators.toml").unwrap_or_else(|e| {
-        println!("{:?}", &e);
-        CondensatorState::default()
-    });
-    let mut main_actor = CondensatorActor::new(
-        coord_state,
-        ActorConfig::default(),
-        Target { // TODO!!!!!!!
-            ip: Arc::new(String::from("192.168.2.211")),
-            port: 502,
-            unit: 1,
-            register: 470,
-            write: WriteCommand::Multi
-        },
-        ids_counter,
-        std::time::Instant::now()
-    );
-
-    let mut tick_interval = time::interval(Duration::from_secs(1));
-
+pub async fn reactive_loop(
+    mut rx: mpsc::UnboundedReceiver<MainDataSignal>,
+    tx_write: mpsc::Sender<WriteRequest>,
+    mut coordinator: HandoffCoordinator,
+) {
+    let mut ticks = time::interval(Duration::from_millis(250));
+    ticks.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
+    let mut deliveries = JoinSet::new();
     loop {
-        tokio::select! {
-            msg = rx.recv() => {
-                match msg {
-                    Some(event) => {
-                        let now = std::time::Instant::now();
-
-                    }
-                    None => {
-                        // приїхали...
-                        break;
-                    }
+        let commands = tokio::select! {
+            event = rx.recv() => match event {
+                Some(event) => coordinator.handle(Instant::now(), event),
+                None => break,
+            },
+            _ = ticks.tick() => coordinator.on_tick(Instant::now()),
+            result = deliveries.join_next(), if !deliveries.is_empty() => {
+                if let Some(Ok(cb)) = result {
+                    coordinator.callback(Instant::now(), cb);
                 }
-            },
-            _ = tick_interval.tick() => {
-                let now = std::time::Instant::now();
-
-            },
+                Vec::new()
+            }
+        };
+        for cmd in commands {
+            let id = cmd.id;
+            let (reply, rx_reply) = oneshot::channel();
+            // Enqueue in decision order: do not race independent send tasks.
+            // A full/closed queue reports failure without blocking Q or timers.
+            if tx_write.try_send((cmd, reply)).is_err() {
+                coordinator.callback(Instant::now(), CommandCallback::Unsatisfied(id));
+                continue;
+            }
+            deliveries.spawn(async move {
+                match time::timeout(Duration::from_secs(8), rx_reply).await {
+                    Ok(Ok(cb)) => cb,
+                    _ => CommandCallback::Unsatisfied(id),
+                }
+            });
         }
     }
+    deliveries.abort_all();
 }

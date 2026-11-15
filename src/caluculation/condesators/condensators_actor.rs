@@ -446,6 +446,13 @@ impl CondensatorActor {
         }
     }
 
+    /// Stop current work and discard Q; retain actual relay states and embargoes.
+    pub fn pause_regulation(&mut self, now: Instant) {
+        self.phase = Phase::Idle;
+        self.q_buf.clear();
+        self.last_q_at = now;
+    }
+
     pub fn set_kgu(&mut self, on: bool) {
         if self.kgu_on != on {
             self.log(format!("КГУ {}", if on { "ввімкнено" } else { "вимкнено" }));

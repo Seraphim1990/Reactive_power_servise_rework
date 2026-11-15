@@ -359,6 +359,11 @@ impl GeneratorActor {
         }
     }
 
+    pub fn pause_regulation(&mut self) {
+        self.phase = Phase::Idle;
+        self.q_buf.clear();
+    }
+
     pub fn phase_name(&self) -> &'static str {
         match self.phase {
             Phase::Idle => "Idle",

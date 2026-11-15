@@ -1,0 +1,32 @@
+# Paths relative to the process working directory (run from the repository root).
+api_settings = "config/settings.ini"
+condensators_settings = "config/condensators.toml"
+trend_capacity = 5
+trend_noise_kw = 2.0
+# Example register numbers: confirm against your hardware.
+generator_remote_register = 7
+generator_carriage = true
+auxiliary_on_value = 1
+auxiliary_off_value = 0
+
+[batteries]
+ip = "192.168.2.211"
+port = 502
+unit = 1
+register = 470
+
+[generator]
+# Placeholder address: replace before connecting real equipment.
+ip = "127.0.0.1"
+port = 502
+unit = 1
+register = 8
+single_write = true
+
+[auxiliary]
+# Placeholder address and register: replace when the station is implemented.
+ip = "127.0.0.1"
+port = 502
+unit = 2
+register = 0
+single_write = true
