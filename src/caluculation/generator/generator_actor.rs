@@ -43,13 +43,16 @@ pub struct GenTarget {
     pub write: WriteCommand,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct GeneratorConfig {
     pub trim: TrimParams,         // ціль, коридор, захисна зона навколо 800, ліміт кроку
     pub p_min_listen_kw: f32,     // нижче цієї P_gen КГУ уставку ігнорує
     pub carriage_step_units: i32, // крок каретки, одиниць уставки
+    #[serde(with = "crate::caluculation::settings::seconds")]
     pub step_timeout: Duration,   // скільки чекати, поки зчитана уставка збіжиться
     pub settle_skip: u8,          // скільки перших Q після запису відкинути
+    #[serde(with = "crate::caluculation::settings::seconds")]
     pub remote_retry: Duration,   // мінімальна пауза між спробами повернути дистанційний режим
 }
 

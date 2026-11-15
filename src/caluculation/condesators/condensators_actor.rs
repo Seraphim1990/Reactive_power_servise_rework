@@ -61,16 +61,22 @@ pub struct Target {
 }
 
 /// Таймінги актора. Поки значення за замовчуванням; потім виносяться у файл.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct ActorConfig {
+    #[serde(with = "crate::caluculation::settings::seconds")]
     pub q_stale_island: Duration,   // немає Q і КГУ був ввімкнений -> острів
+    #[serde(with = "crate::caluculation::settings::seconds")]
     pub q_stale_grid: Duration,     // немає Q і КГУ був вимкнений -> аварія зв'язку
+    #[serde(with = "crate::caluculation::settings::seconds")]
     pub step_timeout: Duration,     // скільки чекати виконання кроку плану
     pub settle_skip: u8,            // скільки перших Q після плану відкинути
     pub settle_samples: u8,         // скільки свіжих Q зібрати перед наступним рішенням
+    #[serde(with = "crate::caluculation::settings::seconds")]
     pub failsafe_step: Duration,    // пауза між гасінням щаблів у Failsafe
     pub failsafe_exit_samples: u32, // скільки свіжих Q потрібно, щоб вийти з Failsafe
     pub shed_q_tolerance_steps: f32, // м'яке вимкнення: наступний крок, коли Q <= ціль + стільки найменших щаблів
+    #[serde(with = "crate::caluculation::settings::seconds")]
     pub shed_timeout: Duration,      // м'яке вимкнення: скільки чекати стабілізації Q перед наступним кроком
 }
 

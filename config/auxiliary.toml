@@ -1,0 +1,10 @@
+on_value = 1
+off_value = 0
+
+[target]
+# Плейсхолдер: замінити адресу і регістр після реалізації установки.
+ip = "127.0.0.1"
+port = 502
+unit = 2
+register = 0
+single_write = true

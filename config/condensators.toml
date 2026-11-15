@@ -17,3 +17,22 @@ safety_margin = 0.05
 poll_period_secs = 2.0
 # Номінальна напруга батарей (В)
 bank_voltage_nom = 400.0
+
+[target]
+ip = "192.168.2.211"
+port = 502
+unit = 1
+register = 470
+single_write = false
+
+# Усі часові параметри актора — у секундах.
+[actor]
+q_stale_island = 20.0
+q_stale_grid = 60.0
+step_timeout = 8.0
+settle_skip = 1
+settle_samples = 2
+failsafe_step = 1.0
+failsafe_exit_samples = 5
+shed_q_tolerance_steps = 2.0
+shed_timeout = 60.0

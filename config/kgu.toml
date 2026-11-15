@@ -1,0 +1,26 @@
+remote_register = 7
+use_carriage = true
+trend_capacity = 5
+trend_noise_kw = 2.0
+
+[target]
+# Приклад адреси: замінити на реальну адресу КГУ.
+ip = "127.0.0.1"
+port = 502
+unit = 1
+register = 8
+single_write = true
+
+# Часові параметри — у секундах.
+[actor]
+p_min_listen_kw = 400.0
+carriage_step_units = 1
+step_timeout = 8.0
+settle_skip = 1
+remote_retry = 5.0
+
+[actor.trim]
+target_kvar = 12.5
+deadband_floor_kvar = 2.5
+guard_units = 5
+max_step_units = 20

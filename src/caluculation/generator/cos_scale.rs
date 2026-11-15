@@ -64,7 +64,8 @@ fn push_out_of_guard(v: i32, q_want: f32, p_kw: f32, guard: i32) -> i32 {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct TrimParams {
     /// Бажаний Q мережі, квар (+ = трохи недокомпенсації), напр. 12.5 для коридору 10..15.
     pub target_kvar: f32,
