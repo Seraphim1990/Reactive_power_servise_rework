@@ -39,6 +39,7 @@ pub async fn reactive_loop(
             // Enqueue in decision order: do not race independent send tasks.
             // A full/closed queue reports failure without blocking Q or timers.
             if tx_write.try_send((cmd, reply)).is_err() {
+                crate::logger::printers::warn(format!("Команду id={id} не передано поштарю: черга заповнена або закрита"));
                 coordinator.callback(Instant::now(), CommandCallback::Unsatisfied(id));
                 continue;
             }

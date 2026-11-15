@@ -133,6 +133,16 @@ fn send_log(msg: String, log_head: ColoredString, head: &str, save_to_file: bool
     };
 
     if let Some(tx) = LOG_TX.get() {
-        let _ = tx.try_send((console_msg, file_msg));
+        if let Err(e) = tx.try_send((console_msg, file_msg)) {
+            // Never silently lose a physical-command event when the queue is full.
+            let (console_msg, file_msg) = e.into_inner();
+            println!("{}", console_msg);
+            if let Some(mut text) = file_msg {
+                write_log_to_file(&mut text);
+            }
+        }
+    } else {
+        // Also visible before initialization or in standalone actor diagnostics.
+        println!("{}", console_msg);
     }
 }

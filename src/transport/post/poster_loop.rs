@@ -35,9 +35,10 @@ impl WriteMaster {
         &mut self,
         mut rx_commands: mpsc::Receiver<(ModbusCommand, oneshot::Sender<CommandCallback>)>,
     ) {
-        // printers::event(String::from("Старт актора запису (Write Master)"));
+        printers::event(String::from("Старт актора запису (Write Master)"));
 
         while let Some((cmd, respond_to)) = rx_commands.recv().await {
+            log_command("отримано команду", &cmd);
             let ip = cmd.target_ip.clone();
             let port = cmd.target_port;
 
@@ -51,6 +52,7 @@ impl WriteMaster {
                             self.contexts.get_mut(&ip).unwrap()
                         }
                         None => {
+                            log_command("запис не розпочато: не вдалося підключитися", &cmd);
                             let _ = respond_to.send(CommandCallback::Unsatisfied(cmd.id));
                             continue;
                         }
@@ -66,10 +68,12 @@ impl WriteMaster {
             let write_res = match cmd.write_command {
                 WriteCommand::Single => {
                     if cmd.new_state.is_empty() {
+                        log_command("запис відхилено: немає значення", &cmd);
                         let _ = respond_to.send(CommandCallback::Unsatisfied(cmd.id));
                         continue;
                     }
                     let val = cmd.new_state[0];
+                    log_command("спроба запису", &cmd);
                     write_process(
                         || ctx.write_single_register(cmd.state_register, val),
                         timeout_duration,
@@ -79,6 +83,7 @@ impl WriteMaster {
                         .await
                 }
                 WriteCommand::Multi => {
+                    log_command("спроба запису", &cmd);
                     write_process(
                         || ctx.write_multiple_registers(cmd.state_register, &cmd.new_state),
                         timeout_duration,
@@ -90,8 +95,12 @@ impl WriteMaster {
             };
 
             let callback = match write_res {
-                Ok(()) => CommandCallback::Happy(cmd.id),
+                Ok(()) => {
+                    log_command("пристрій підтвердив запис (фактичний стан перевіряється телеметрією)", &cmd);
+                    CommandCallback::Happy(cmd.id)
+                },
                 Err(e) => {
+                    log_command(&format!("помилка запису: {e:?}"), &cmd);
                     // Логіка перепідключення: при пошкодженні сокета або заголовка видаляємо контекст з хешу
                     match e {
                         ModbusWriteError::SocketFail | ModbusWriteError::HeaderMisMatch => {
@@ -137,6 +146,19 @@ impl WriteMaster {
             }
         }
     }
+}
+
+/// Common logging point for ALL writers: batteries, KGU, remote and auxiliary.
+fn log_command(stage: &str, cmd: &ModbusCommand) {
+    let (function, values) = match cmd.write_command {
+        WriteCommand::Single => ("0x06", &cmd.new_state[..cmd.new_state.len().min(1)]),
+        WriteCommand::Multi => ("0x10", cmd.new_state.as_slice()),
+    };
+    printers::event(format!(
+        "Modbus: {stage}; id={}, {}:{}, unit={}, function={}, register={}, values={:?}",
+        cmd.id, cmd.target_ip, cmd.target_port, cmd.target_address,
+        function, cmd.state_register, values
+    ));
 }
 
 async fn write_process<F, Fut>(
