@@ -21,7 +21,9 @@ use transport::{
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
+    logger::printers::init_logger();
     tracing_subscriber::fmt()
+        .with_writer(logger::printers::console_writer)
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
         )
@@ -30,7 +32,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let kgu_cfg = KguSettings::load_or_create("config/kgu.toml")?;
     let auxiliary_cfg = AuxiliarySettings::load_or_create("config/auxiliary.toml")?;
     let api_config = ApiConfig::load("config/settings.ini").map_err(std::io::Error::other)?;
-    let logger = logger::printers::init_logger();
     let ids = Arc::new(AtomicU64::new(1));
     let grid = caluculation::grid::GridMonitor::new(batteries_cfg.grid.clone(), Instant::now());
     let batteries = batteries_cfg.into_actor(ids.clone(), Instant::now());
@@ -56,6 +57,5 @@ async fn main() -> Result<(), Box<dyn Error>> {
     control.abort();
     writer.abort();
     drop(api);
-    logger.abort();
     result.map_err(|e| std::io::Error::other(e).into())
 }
