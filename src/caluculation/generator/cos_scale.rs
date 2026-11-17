@@ -73,13 +73,13 @@ pub struct TrimParams {
     pub deadband_floor_kvar: f32,
     /// Півширина захисної зони навколо 800, в одиницях уставки.
     pub guard_units: i32,
-    /// Максимальна зміна уставки за один запис.
+    /// Максимальна зміна уставки за один запис. 1000 дозволяє всю шкалу.
     pub max_step_units: i32,
 }
 
 impl Default for TrimParams {
     fn default() -> Self {
-        Self { target_kvar: 12.5, deadband_floor_kvar: 2.5, guard_units: 5, max_step_units: 20 }
+        Self { target_kvar: 12.5, deadband_floor_kvar: 2.5, guard_units: 5, max_step_units: 1000 }
     }
 }
 
@@ -248,7 +248,7 @@ mod tests {
 
     #[test]
     fn rate_limit_is_respected() {
-        let p = TrimParams::default();
+        let p = TrimParams { max_step_units: 20, ..TrimParams::default() };
         let v = trim_setpoint(400.0, 700, 300.0, &p).unwrap(); // величезна помилка
         assert_eq!(v, 700 - p.max_step_units);
     }

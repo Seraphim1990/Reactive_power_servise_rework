@@ -1,7 +1,8 @@
 remote_register = 7
 # Інтервал повтору окремого remote-актора (секунди).
 remote_retry = 5.0
-use_carriage = true
+# false: одразу розрахувати потрібну уставку за P КГУ та похибкою Q.
+use_carriage = false
 trend_capacity = 5
 trend_noise_kw = 2.0
 
@@ -24,4 +25,5 @@ settle_skip = 1
 target_kvar = 12.5
 deadband_floor_kvar = 2.5
 guard_units = 5
-max_step_units = 20
+# 1000 дозволяє всю потрібну корекцію за один запис у межах шкали 0..1000.
+max_step_units = 1000

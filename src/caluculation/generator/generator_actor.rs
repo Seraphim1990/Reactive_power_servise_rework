@@ -455,3 +455,36 @@ impl GeneratorActor {
         Some(cmd)
     }
 }
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::caluculation::settings::KguSettings;
+    use super::super::cos_scale::q_of;
+
+    #[test]
+    fn configured_regulator_corrects_full_reactive_error_in_one_command() {
+        for q_grid in [100.0, -100.0] {
+            let cfg: KguSettings = toml::from_str(include_str!("../../../config/kgu.toml")).unwrap();
+            assert!(!cfg.use_carriage);
+            let target = cfg.actor.trim.target_kvar;
+            let deadband = cfg.actor.trim.deadband_floor_kvar;
+            let register = cfg.target.register;
+            let (mut actor, _, _) = cfg.into_actor(Arc::new(AtomicU64::new(1)));
+            let now = Instant::now();
+            actor.set_engine_run(now, true);
+            actor.set_remote(true);
+            actor.set_active_power(now, 400.0);
+            actor.set_cos_readback(now, 700);
+            assert!(actor.handle_q(now, q_grid).is_none());
+            assert!(actor.handle_q(now, q_grid).is_none());
+            let cmd = actor.handle_q(now, q_grid).unwrap();
+            assert_eq!(cmd.state_register, register);
+            let want = cmd.new_state[0] as i32;
+            assert!((want - 700).abs() > 20, "correction must not be limited to 1 or 20 units");
+            let predicted = q_grid as f32 - (q_of(want, 400.0) - q_of(700, 400.0));
+            assert!((predicted - target).abs() <= deadband,
+                "q_grid={q_grid}, want={want}, predicted={predicted}");
+            assert!(actor.handle_q(now, q_grid).is_none(), "wait for readback before next command");
+        }
+    }
+}

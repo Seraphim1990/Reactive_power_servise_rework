@@ -180,7 +180,7 @@ impl Default for KguSettings {
             },
             remote_register: 7,
             remote_retry: default_remote_retry(),
-            use_carriage: true,
+            use_carriage: false,
             trend_capacity: 5,
             trend_noise_kw: 2.0,
             actor: GeneratorConfig::default(),
