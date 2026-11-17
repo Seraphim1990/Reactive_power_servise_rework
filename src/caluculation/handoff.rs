@@ -196,6 +196,19 @@ impl HandoffCoordinator {
                 "Режим мережі: {:?} -> {:?}",
                 self.applied_grid, mode
             ));
+            if mode == GridMode::Blackout {
+                let (p_age, q_age) = self.grid.analyzer_ages(now);
+                let age = |v: Option<std::time::Duration>| {
+                    v.map(|d| format!("{:.1} с", d.as_secs_f64()))
+                        .unwrap_or_else(|| "ще не отримано".into())
+                };
+                printers::warn(format!(
+                    "Блекаут: немає P/Q аналізатора; останній P: {}, останній Q: {}, таймаут {:.1} с",
+                    age(p_age),
+                    age(q_age),
+                    self.grid.cfg.analyzer_timeout.as_secs_f64()
+                ));
+            }
             self.applied_grid = mode;
             self.trend.clear();
             self.generator.pause_regulation();
@@ -418,6 +431,28 @@ mod tests {
         c.handle(at, MainDataSignal::MainQ(50.0));
         assert_eq!(c.grid_mode(), GridMode::Grid);
         assert_eq!(c.mode(), CompensationMode::Batteries);
+    }
+
+    #[test]
+    fn continuing_q_with_quiet_p_does_not_send_emergency_off() {
+        let now = Instant::now();
+        let mut c = make(now);
+        c.grid = GridMonitor::new(Default::default(), now);
+        c.handle(now, MainDataSignal::CondensatorsRelayState(0.0));
+        c.handle(now, MainDataSignal::MainP(100.0));
+        // No voltage provided: ordinary regulation will not request turn-on.
+        for seconds in (0..=40).step_by(2) {
+            let at = now + std::time::Duration::from_secs(seconds);
+            assert!(c.handle(at, MainDataSignal::MainQ(170.0)).is_empty());
+            assert!(c.on_tick(at).is_empty());
+            assert_eq!(c.grid_mode(), GridMode::Grid);
+        }
+        let cmds = c.on_tick(now + std::time::Duration::from_secs(50));
+        assert_eq!(c.grid_mode(), GridMode::Blackout);
+        assert!(
+            cmds.iter()
+                .any(|c| c.state_register == 470 && c.new_state == vec![0])
+        );
     }
 
     #[test]

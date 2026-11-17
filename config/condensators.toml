@@ -42,6 +42,6 @@ shed_timeout = 60.0
 island_max = 15.0
 island_hold = 10.0
 island_min_samples = 5
-# Відсутність свіжого P або Q протягом цього часу — блекаут.
+# Відсутність обох вимірів P і Q протягом цього часу — блекаут.
 analyzer_timeout = 10.0
 off_retry = 5.0
