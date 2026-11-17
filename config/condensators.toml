@@ -19,7 +19,7 @@ poll_period_secs = 2.0
 bank_voltage_nom = 400.0
 
 [target]
-ip = "192.168.2.211"
+ip = "192.168.2.212"
 port = 502
 unit = 1
 register = 470

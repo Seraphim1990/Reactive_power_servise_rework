@@ -1,11 +1,11 @@
 pub enum MainDataSignal {
-    MiddleVoltage(f64),
-    MainQ(f64),                     // реактив трансформатора, квар
-    MainP(f64),                     // активна потужність трансформатора, кВт
-    CondensatorsRelayState(f64),    // по хорошому має бути u16!,
-    SubStationOneState(f64),        // має бути bool
-    GenCosSetpointOutput(f64),      // теж u16
-    GenActivePower(f64),            // u16
-    GenSetterLocalRemoteState(f64), // bool
-    GenEngineRun(f64),              // bool
+    MiddleVoltage(f64), // "V1/V12_MidleVoltage"
+    MainQ(f64),       // "TotalMidleKVar"
+    MainP(f64),                // "TotalMiddlePower"
+    CondensatorsRelayState(f64),  // "Condensators_reley_output"
+    SubStationOneState(f64),   // TODO
+    GenCosSetpointOutput(f64),   // "Cos_phi_engine_output"
+    GenActivePower(f64),         // "KGU_gen_power"
+    GenSetterLocalRemoteState(f64), // "Distance_working_reguler_engine"
+    GenEngineRun(f64),       // "KGU_generator_work"
 }
