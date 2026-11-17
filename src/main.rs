@@ -20,6 +20,8 @@ use transport::{
 };
 
 fn main() -> std::process::ExitCode {
+    #[cfg(windows)]
+    let _ = colored::control::set_virtual_terminal(true);
     // The terminal pause runs after Tokio has stopped, outside its worker threads.
     let result = std::panic::catch_unwind(|| -> Result<(), String> {
         let runtime = tokio::runtime::Builder::new_multi_thread()
