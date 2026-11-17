@@ -276,7 +276,14 @@ impl Actor {
     }
 
     fn subscription_message(&self) -> String {
-        unimplemented!("Визначити теги та формат підписки API")
+        // Required control tags remain subscribed when additional tags/nodes are supplied.
+        let mut tags: Vec<&str> = MainDataSignal::TAGS.to_vec();
+        for tag in &self.sub.tags {
+            if tag != "462_condensators_state" && !tags.contains(&tag.as_str()) {
+                tags.push(tag.as_str());
+            }
+        }
+        json!({ "nodes": self.sub.nodes, "values": tags, "devices": [] }).to_string()
     }
 
     // ----- HTTP авторизація -----
@@ -417,9 +424,124 @@ impl Actor {
         }
     }
 
-    /// Тут зіставити теги API з MainDataSignal. Відсутні/невалідні значення
-    /// не перетворювати на нуль і не надсилати як достовірну телеметрію.
-    fn on_text_message_received(&self, _text: &str) -> Vec<MainDataSignal> {
-        unimplemented!("Зіставити теги API з MainDataSignal")
+    /// The API sends {"values": [{"tag": "...", "value": number}, ...]}.
+    /// Missing/null/non-numeric values and the API's no-value sentinel are skipped.
+    fn on_text_message_received(&self, text: &str) -> Vec<MainDataSignal> {
+        let Ok(root) = serde_json::from_str::<Value>(text) else {
+            return Vec::new();
+        };
+        let Some(values) = root.get("values").and_then(Value::as_array) else {
+            return Vec::new();
+        };
+        values
+            .iter()
+            .filter_map(|entry| {
+                let tag = entry.get("tag")?.as_str()?;
+                let value = entry.get("value")?.as_f64()?;
+                if !value.is_finite() || value < -1.79769e300 {
+                    return None;
+                }
+                MainDataSignal::from_tag(tag, value)
+            })
+            .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn actor() -> (Actor, mpsc::UnboundedReceiver<MainDataSignal>) {
+        let (signal_tx, signals) = mpsc::unbounded_channel();
+        let (_, cmd_rx) = mpsc::unbounded_channel();
+        let (data_tx, _) = broadcast::channel(8);
+        let (node_tx, _) = broadcast::channel(8);
+        let (err_tx, _) = watch::channel(true);
+        (
+            Actor {
+                signal_tx,
+                cfg: Config {
+                    host: "127.0.0.1".into(),
+                    port: 8080,
+                    username: String::new(),
+                    password: String::new(),
+                },
+                http: reqwest::Client::new(),
+                cmd_rx,
+                data_tx,
+                node_tx,
+                err_tx,
+                sub: Subscription::default(),
+                access_token: String::new(),
+                refresh_token: String::new(),
+                closed: false,
+            },
+            signals,
+        )
+    }
+
+    #[tokio::test]
+    async fn subscribes_all_control_tags_once_without_auxiliary() {
+        let (mut a, _) = actor();
+        a.sub.tags = vec!["TotalMidleKVar".into(), "462_condensators_state".into()];
+        a.sub.nodes = vec![10];
+        let message: Value = serde_json::from_str(&a.subscription_message()).unwrap();
+        assert_eq!(message["values"], json!(MainDataSignal::TAGS));
+        assert_eq!(message["nodes"], json!([10]));
+        assert_eq!(message["devices"], json!([]));
+    }
+
+    #[tokio::test]
+    async fn forwards_each_tag_to_the_correct_signal_including_real_zeros() {
+        let (a, mut rx) = actor();
+        a.process_message(
+            &json!({"values": [
+                {"tag":"V1/V12_MidleVoltage", "value":10600.0},
+                {"tag":"TotalMidleKVar", "value":0.0},
+                {"tag":"TotalMiddlePower", "value":100.0},
+                {"tag":"Condensators_reley_output", "value":3},
+                {"tag":"Cos_phi_engine_output", "value":795},
+                {"tag":"KGU_gen_power", "value":420},
+                {"tag":"Distance_working_reguler_engine", "value":1},
+                {"tag":"KGU_generator_work", "value":0}
+            ]})
+            .to_string(),
+        );
+        let expected = [
+            MainDataSignal::MiddleVoltage(10600.0),
+            MainDataSignal::MainQ(0.0),
+            MainDataSignal::MainP(100.0),
+            MainDataSignal::CondensatorsRelayState(3.0),
+            MainDataSignal::GenCosSetpointOutput(795.0),
+            MainDataSignal::GenActivePower(420.0),
+            MainDataSignal::GenSetterLocalRemoteState(1.0),
+            MainDataSignal::GenEngineRun(0.0),
+        ];
+        for signal in expected {
+            assert_eq!(rx.try_recv().unwrap(), signal);
+        }
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn skips_unavailable_unknown_and_auxiliary_values_without_inventing_zeros() {
+        let (a, _) = actor();
+        for text in ["broken json", "null", "{}", r#"{"values":null}"#] {
+            assert!(a.on_text_message_received(text).is_empty());
+        }
+        let signals = a.on_text_message_received(
+            &json!({"values":[
+                {"tag":"TotalMidleKVar", "value":null},
+                {"tag":"TotalMiddlePower", "value":"bad"},
+                {"tag":"TotalMiddlePower", "value":-1.7976931348623157e308},
+                {"tag":"TotalMidleKVar"},
+                {"value":100},
+                {"tag":"unknown", "value":10},
+                {"tag":"462_condensators_state", "value":1},
+                {"tag":"KGU_gen_power", "value":0}
+            ]})
+            .to_string(),
+        );
+        assert_eq!(signals, vec![MainDataSignal::GenActivePower(0.0)]);
     }
 }

@@ -46,7 +46,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let (api, mut api_task) = ApiClient::spawn(api_config, telemetry_tx);
     api.run_api_worker();
 
-    // A panic in an unfinished API hook must stop the other workers too.
+    // A failed API worker must stop the other workers too.
     let result = tokio::select! {
         signal = tokio::signal::ctrl_c() => signal.map_err(|e| e.to_string()),
         result = &mut api_task => Err(format!("API worker stopped: {result:?}")),
