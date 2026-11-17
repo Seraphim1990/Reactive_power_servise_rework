@@ -19,8 +19,34 @@ use transport::{
     web_api_actor::{ApiClient, Config as ApiConfig},
 };
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn Error>> {
+fn main() -> std::process::ExitCode {
+    // The terminal pause runs after Tokio has stopped, outside its worker threads.
+    let result = std::panic::catch_unwind(|| -> Result<(), String> {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| format!("Не вдалося створити Tokio runtime: {e}"))?;
+        runtime.block_on(run()).map_err(|e| e.to_string())
+    });
+    let message = match result {
+        Ok(Ok(())) => return std::process::ExitCode::SUCCESS,
+        Ok(Err(message)) => message,
+        Err(payload) => {
+            let reason = payload
+                .downcast_ref::<String>()
+                .map(String::as_str)
+                .or_else(|| payload.downcast_ref::<&str>().copied())
+                .unwrap_or("невідома причина");
+            format!("Паніка програми: {reason}")
+        }
+    };
+    eprintln!("\nАварійне завершення: {message}\nНатисніть Enter, щоб закрити програму...");
+    let mut input = String::new();
+    let _ = std::io::stdin().read_line(&mut input);
+    std::process::ExitCode::FAILURE
+}
+
+async fn run() -> Result<(), Box<dyn Error>> {
     logger::printers::init_logger();
     tracing_subscriber::fmt()
         .with_writer(logger::printers::console_writer)
