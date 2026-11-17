@@ -1,3 +1,5 @@
 [General]
 hostaddr = 127.0.0.1
 hostport = 8080
+username = your_login
+password = your_password

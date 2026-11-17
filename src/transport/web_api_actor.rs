@@ -57,8 +57,7 @@ pub struct Config {
 }
 
 impl Config {
-    /// Читає setting/settings.ini (секція [General], як у QSettings без групи).
-    /// Логін/пароль можна перевизначити змінними оточення API_USER / API_PASS.
+    /// Читає адресу, порт, username та password із config/settings.ini, секція [General].
     pub fn load(path: &str) -> Result<Self, String> {
         let mut ini = Ini::new();
         ini.load(path)?;
@@ -70,9 +69,12 @@ impl Config {
         Ok(Self {
             host,
             port,
-            // Облікові дані задаються через середовище.
-            username: std::env::var("API_USER").map_err(|_| "API_USER відсутній")?,
-            password: std::env::var("API_PASS").map_err(|_| "API_PASS відсутній")?,
+            username: ini
+                .get("General", "username")
+                .ok_or("username відсутній у [General]")?,
+            password: ini
+                .get("General", "password")
+                .ok_or("password відсутній у [General]")?,
         })
     }
 }
